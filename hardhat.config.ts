@@ -1,6 +1,5 @@
 import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
-import "hardhat-contract-sizer";
 import "hardhat-deploy";
 import { config as dotenvConfig } from "dotenv";
 
@@ -92,10 +91,17 @@ const config: HardhatUserConfig = {
     solidity: {
         compilers: [
             {
-                version: "0.8.28",
+                version: "0.8.0",
             },
             {
                 version: "0.8.28",
+                settings: {
+                    optimizer: {
+                        enabled: true,
+                        runs: 200,
+                    },
+                    viaIR: true,
+                },
             },
         ],
     },

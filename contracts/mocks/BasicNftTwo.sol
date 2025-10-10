@@ -20,7 +20,7 @@ contract BasicNftTwo is ERC721 {
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+        _requireOwned(tokenId);
         return TOKEN_URI;
     }
 
