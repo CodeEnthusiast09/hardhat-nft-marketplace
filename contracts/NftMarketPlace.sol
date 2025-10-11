@@ -185,7 +185,7 @@ contract NftMarketplace is ReentrancyGuard {
         address nftAddress,
         uint256 tokenId,
         address paymentToken
-    ) external payable isListed(nftAddress, tokenId) nonReentrant {
+    ) external payable isListed(nftAddress, tokenId) isTokenSupported(paymentToken) nonReentrant {
         // Challenge - How would you refactor this contract to take:
         // 1. Abitrary tokens as payment? (HINT - Chainlink Price Feeds!)
         // 2. Be able to set prices in other currencies?
@@ -210,16 +210,10 @@ contract NftMarketplace is ReentrancyGuard {
                 revert NftMarketplace__PriceNotMet(nftAddress, tokenId, listedItem.price);
             }
 
-            // Convert to seller's preferred token if needed
-            if (listedItem.paymentToken == NATIVE_TOKEN) {
-                s_proceeds[listedItem.seller][NATIVE_TOKEN] += msg.value;
-            } else {
-                // In production, you'd need a DEX integration here
-                // For now, we'll require same token
-                revert NftMarketplace__TokenNotSupported();
-            }
+            // Store proceeds in ETH for the seller
+            s_proceeds[listedItem.seller][NATIVE_TOKEN] += msg.value;
         } else {
-            // Paying with ERC20
+            // Buyer is paying with ERC20 token
             IERC20 token = IERC20(paymentToken);
 
             // Transfer tokens from buyer to contract
@@ -229,13 +223,15 @@ contract NftMarketplace is ReentrancyGuard {
                 revert NftMarketplace__TransferFailed();
             }
 
-            // Add to seller's proceeds
+            // Store proceeds in the ERC20 token for the seller
             s_proceeds[listedItem.seller][paymentToken] += requiredAmount;
         }
-        // Could just send the money...
+
         // https://fravoll.github.io/solidity-patterns/pull_over_push.html
+        // Remove listing
         delete (s_listings[nftAddress][tokenId]);
 
+        // Transfer NFT to buyer
         IERC721(nftAddress).safeTransferFrom(listedItem.seller, msg.sender, tokenId);
 
         emit ItemBought(msg.sender, nftAddress, tokenId, listedItem.price, paymentToken);
@@ -271,6 +267,8 @@ contract NftMarketplace is ReentrancyGuard {
 
     /*
      * @notice Method for withdrawing proceeds from sales
+     * @param token Token to withdraw (use address(0) for ETH)
+     * @dev Sellers may have proceeds in multiple tokens if buyers paid in different currencies
      */
     function withdrawProceeds(address token) external nonReentrant {
         uint256 proceeds = s_proceeds[msg.sender][token];
@@ -294,6 +292,39 @@ contract NftMarketplace is ReentrancyGuard {
                 revert NftMarketplace__TransferFailed();
             }
         }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        HELPER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Helper function to get the equivalent price in a different token
+     * @param nftAddress Address of NFT contract
+     * @param tokenId Token ID of NFT
+     * @param targetToken Token to convert price to
+     * @return Equivalent price in target token
+     */
+
+    function getListingPriceInToken(
+        address nftAddress,
+        uint256 tokenId,
+        address targetToken
+    ) external view isListed(nftAddress, tokenId) isTokenSupported(targetToken) returns (uint256) {
+        Listing memory listing = s_listings[nftAddress][tokenId];
+
+        if (listing.paymentToken == targetToken) {
+            return listing.price;
+        }
+
+        return
+            PriceConverter.convertPrice(
+                listing.price,
+                s_supportedTokens[listing.paymentToken].priceFeed,
+                s_supportedTokens[listing.paymentToken].decimals,
+                s_supportedTokens[targetToken].priceFeed,
+                s_supportedTokens[targetToken].decimals
+            );
     }
 
     /*//////////////////////////////////////////////////////////////

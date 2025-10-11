@@ -1,6 +1,6 @@
 import hre from "hardhat";
-import MockModule from "../ignition/modules/Mock";
-import NFTMarketPlaceModule from "../ignition/modules/nft-market-place";
+import MockModule from "../ignition/modules/mock";
+import NFTMarketPlaceModule from "../ignition/modules/nft-marketplace";
 import {
     developmentChains,
     networkConfig,
