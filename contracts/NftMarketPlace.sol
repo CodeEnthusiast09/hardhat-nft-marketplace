@@ -360,6 +360,10 @@ contract NftMarketplace is ReentrancyGuard {
     // Getter Functions //
     /////////////////////
 
+    function getOwner() external view returns (address) {
+        return i_owner;
+    }
+
     function getListing(address nftAddress, uint256 tokenId) external view returns (Listing memory) {
         return s_listings[nftAddress][tokenId];
     }

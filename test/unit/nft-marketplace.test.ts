@@ -4,6 +4,7 @@ import { network, ethers } from "hardhat";
 import hre from "hardhat";
 import { developmentChains } from "../../helper-hardhat.config";
 import { NftMarketplace, BasicNft } from "../../typechain-types";
+import MockModule from "../../ignition/modules/mock";
 import NftMarketPlaceModule from "../../ignition/modules/nft-marketplace";
 import BasicNftModule from "../../ignition/modules/basic-nft";
 
@@ -14,13 +15,15 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
               nftMarketplaceContract: NftMarketplace,
               basicNft: BasicNft;
 
-          const PRICE = ethers.parseEther("0.1");
+          const PRICE = ethers.parseEther("0.0001");
 
           const TOKEN_ID = 0;
 
           let deployer: SignerWithAddress;
 
           let user: SignerWithAddress;
+
+          let priceFeedAddress: string;
 
           beforeEach(async () => {
               const accounts = await ethers.getSigners();
@@ -41,8 +44,20 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                   basicNftAddress,
               )) as BasicNft;
 
-              const nftMarketplaceDeployed =
-                  await hre.ignition.deploy(NftMarketPlaceModule);
+              const mockResult = await hre.ignition.deploy(MockModule);
+              const mock = mockResult.mockV3Aggregator;
+              priceFeedAddress = await mock.getAddress();
+
+              const nftMarketplaceDeployed = await hre.ignition.deploy(
+                  NftMarketPlaceModule,
+                  {
+                      parameters: {
+                          NFTMarketPlaceModule: {
+                              priceFeed: priceFeedAddress,
+                          },
+                      },
+                  },
+              );
 
               const nftMarketPlace = nftMarketplaceDeployed.nftMarketPlace;
 
@@ -66,16 +81,31 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // SETUP & CONSTRUCTOR
           // ============================================================================
 
-          describe("Constructor", () => {
-              it("initializes with contract owner");
-              // ASSERT: owner == deployer
+          describe("Constructor", function () {
+              it("initializes with contract owner", async function () {
+                  const owner = await nftMarketplace.getOwner();
 
-              it("sets up native ETH token support by default");
-              // ASSERT: isTokenSupported(NATIVE_TOKEN) == true
+                  assert.equal(owner, deployer.address);
+              });
 
-              it("correctly configures ETH price feed");
-              // ASSERT: getTokenInfo(NATIVE_TOKEN).priceFeed == ethPriceFeed
-              // ASSERT: getTokenInfo(NATIVE_TOKEN).decimals == 18
+              it("sets up native ETH token support by default", async function () {
+                  const NATIVE_TOKEN = ethers.ZeroAddress;
+                  const isSupported =
+                      await nftMarketplace.isTokenSupportedPublic(NATIVE_TOKEN);
+
+                  expect(isSupported).to.be.true;
+              });
+
+              it("correctly configures ETH price feed", async function () {
+                  const NATIVE_TOKEN = ethers.ZeroAddress;
+
+                  const tokenInfo =
+                      await nftMarketplace.getTokenInfo(NATIVE_TOKEN);
+
+                  assert.equal(tokenInfo.priceFeed, priceFeedAddress);
+
+                  assert.equal(tokenInfo.decimals, BigInt(18));
+              });
           });
 
           // ============================================================================
@@ -83,40 +113,128 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("Token Management", () => {
+              let USDC: string;
+
+              let usdcPriceFeed: string;
+
+              beforeEach(async function () {
+                  USDC = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
+                  usdcPriceFeed = "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E";
+              });
+
               describe("addSupportedToken", () => {
-                  it("allows owner to add new supported tokens");
-                  // ACT: owner.addSupportedToken(USDC, usdcPriceFeed, 6)
-                  // ASSERT: isTokenSupported(USDC) == true
-                  // ASSERT: getTokenInfo(USDC).decimals == 6
+                  it("allows owner to add new supported tokens", async function () {
+                      // ACT: owner.addSupportedToken(USDC, usdcPriceFeed, 6)
+                      await nftMarketplace.addSupportedToken(
+                          USDC,
+                          usdcPriceFeed,
+                          6,
+                      );
 
-                  it("reverts when non-owner tries to add tokens");
-                  // ACT: nonOwner.addSupportedToken(USDC, usdcPriceFeed, 6)
-                  // ASSERT: reverts with "Not contract owner"
+                      // ASSERT: isTokenSupported(USDC) == true
+                      const isSupported =
+                          await nftMarketplace.isTokenSupportedPublic(USDC);
+                      expect(isSupported).to.be.true;
 
-                  it("emits TokenAdded event");
+                      // ASSERT: getTokenInfo(USDC).decimals == 6
+                      const tokenInfo = await nftMarketplace.getTokenInfo(USDC);
+                      assert.equal(tokenInfo.decimals, BigInt(6));
+                      assert.equal(tokenInfo.priceFeed, usdcPriceFeed);
+                  });
+
+                  it("reverts when non-owner tries to add tokens", async function () {
+                      // HINT: Use .connect() to switch signer
+                      await expect(
+                          nftMarketplace
+                              .connect(user)
+                              .addSupportedToken(USDC, usdcPriceFeed, 6),
+                      ).to.be.revertedWith("Not contract owner");
+                  });
+
+                  it("emits TokenAdded event", async function () {
+                      await expect(
+                          nftMarketplace.addSupportedToken(
+                              USDC,
+                              usdcPriceFeed,
+                              6,
+                          ),
+                      )
+                          .to.emit(nftMarketplace, "TokenAdded")
+                          .withArgs(USDC, usdcPriceFeed, 6);
+                  });
                   // ACT: owner.addSupportedToken(USDC, usdcPriceFeed, 6)
                   // ASSERT: event emitted with (USDC, usdcPriceFeed, 6)
               });
 
               describe("removeSupportedToken", () => {
-                  it("allows owner to remove supported tokens");
-                  // ARRANGE: add USDC token
-                  // ACT: owner.removeSupportedToken(USDC)
-                  // ASSERT: isTokenSupported(USDC) == false
+                  beforeEach(async function () {
+                      // ARRANGE: Add USDC token first for all these tests
+                      await nftMarketplace.addSupportedToken(
+                          USDC,
+                          usdcPriceFeed,
+                          6,
+                      );
+                  });
 
-                  it("reverts when non-owner tries to remove tokens");
-                  // ACT: nonOwner.removeSupportedToken(USDC)
-                  // ASSERT: reverts with "Not contract owner"
+                  it("allows owner to remove supported tokens", async function () {
+                      await nftMarketplace.removeSupportedToken(USDC);
 
-                  it("prevents NEW listings with removed token");
-                  // ARRANGE: add USDC, list NFT, remove USDC
-                  // ACT: listItem(nft2, tokenId2, 1000, USDC)
-                  // ASSERT: reverts with TokenNotSupported
+                      const isSupported =
+                          await nftMarketplace.isTokenSupportedPublic(USDC);
 
-                  it("prevents buying with removed token");
-                  // ARRANGE: add USDC, list NFT in ETH, remove USDC
-                  // ACT: buyItem(nftAddress, tokenId, USDC)
-                  // ASSERT: reverts with TokenNotSupported
+                      expect(isSupported).to.be.false;
+                  });
+
+                  it("reverts when non-owner tries to remove tokens", async function () {
+                      await expect(
+                          nftMarketplace
+                              .connect(user)
+                              .removeSupportedToken(USDC),
+                      ).to.be.revertedWith("Not contract owner");
+                  });
+
+                  it("prevents NEW listings with removed token", async function () {
+                      // Remove USDC support
+                      await nftMarketplace.removeSupportedToken(USDC);
+
+                      // ACT: Try to list with removed token
+                      // HINT: You need to import/define the custom error
+                      await expect(
+                          nftMarketplace.listItem(
+                              basicNft.getAddress(),
+                              TOKEN_ID,
+                              1000,
+                              USDC,
+                          ),
+                      ).to.be.revertedWithCustomError(
+                          nftMarketplace,
+                          "NftMarketplace__TokenNotSupported",
+                      );
+                  });
+
+                  it("prevents buying with removed token", async function () {
+                      const NATIVE_TOKEN = ethers.ZeroAddress;
+
+                      await nftMarketplace.listItem(
+                          basicNft.getAddress(),
+                          TOKEN_ID,
+                          PRICE,
+                          NATIVE_TOKEN,
+                      );
+
+                      // Remove USDC support
+                      await nftMarketplace.removeSupportedToken(USDC);
+
+                      // ACT: Try to list with removed token
+                      await expect(
+                          nftMarketplace
+                              .connect(user)
+                              .buyItem(basicNft.getAddress(), TOKEN_ID, USDC),
+                      ).to.be.revertedWithCustomError(
+                          nftMarketplace,
+                          "NftMarketplace__TokenNotSupported",
+                      );
+                  });
               });
           });
 
