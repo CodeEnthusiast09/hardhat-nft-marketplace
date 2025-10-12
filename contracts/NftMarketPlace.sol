@@ -211,7 +211,7 @@ contract NftMarketplace is ReentrancyGuard {
             }
 
             // Store proceeds in ETH for the seller
-            s_proceeds[listedItem.seller][NATIVE_TOKEN] += msg.value;
+            s_proceeds[listedItem.seller][NATIVE_TOKEN] += requiredAmount;
         } else {
             // Buyer is paying with ERC20 token
             IERC20 token = IERC20(paymentToken);
@@ -234,7 +234,7 @@ contract NftMarketplace is ReentrancyGuard {
         // Transfer NFT to buyer
         IERC721(nftAddress).safeTransferFrom(listedItem.seller, msg.sender, tokenId);
 
-        emit ItemBought(msg.sender, nftAddress, tokenId, listedItem.price, paymentToken);
+        emit ItemBought(msg.sender, nftAddress, tokenId, requiredAmount, paymentToken);
     }
 
     /*

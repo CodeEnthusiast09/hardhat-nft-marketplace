@@ -3,51 +3,98 @@ import { assert, expect } from "chai";
 import { network, ethers } from "hardhat";
 import hre from "hardhat";
 import { developmentChains } from "../../helper-hardhat.config";
-import { NftMarketplace, BasicNft } from "../../typechain-types";
-import MockModule from "../../ignition/modules/mock";
+import { NftMarketplace, BasicNft, MockERC20 } from "../../typechain-types";
+import MocksModule from "../../ignition/modules/mock";
 import NftMarketPlaceModule from "../../ignition/modules/nft-marketplace";
 import BasicNftModule from "../../ignition/modules/basic-nft";
+import MockErc20Module from "../../ignition/modules/mock-erc20";
 
 !developmentChains.includes(network.name)
     ? describe.skip
     : describe("Nft Marketplace Unit Tests", function () {
           let nftMarketplace: NftMarketplace,
               nftMarketplaceContract: NftMarketplace,
-              basicNft: BasicNft;
+              basicNft: BasicNft,
+              mockUsdc: MockERC20;
 
-          const PRICE = ethers.parseEther("0.0001");
+          const PRICE = ethers.parseEther("1");
 
           const TOKEN_ID = 0;
 
+          const NATIVE_TOKEN = ethers.ZeroAddress;
+
           let deployer: SignerWithAddress;
 
-          let user: SignerWithAddress;
+          let user1: SignerWithAddress;
+
+          let user2: SignerWithAddress;
 
           let priceFeedAddress: string;
+
+          let USDC: string;
+
+          let usdcPriceFeed: string;
+
+          const USDC_PRICE = 1000_000000n;
+
+          const ETH_USD_PRICE = 4000_00000000n; // $4000
+          const USDC_USD_PRICE = 1_00000000n; // $1
 
           beforeEach(async () => {
               const accounts = await ethers.getSigners();
 
               deployer = accounts[0];
 
-              user = accounts[1];
+              user1 = accounts[1];
 
+              user2 = accounts[2];
+
+              // Deploy BasicNFT
               const basicNftDeployed =
                   await hre.ignition.deploy(BasicNftModule);
 
               const basicNFT = basicNftDeployed.basicNft;
 
               const basicNftAddress = await basicNFT.getAddress();
-
               basicNft = (await ethers.getContractAt(
                   "BasicNft",
                   basicNftAddress,
               )) as BasicNft;
 
-              const mockResult = await hre.ignition.deploy(MockModule);
-              const mock = mockResult.mockV3Aggregator;
-              priceFeedAddress = await mock.getAddress();
+              // Deploy Mocks (Price Feeds)
+              const mocks = await hre.ignition.deploy(MocksModule);
 
+              priceFeedAddress = await mocks.ethPriceFeed.getAddress();
+
+              usdcPriceFeed = await mocks.usdcPriceFeed.getAddress();
+
+              // Deploy MockERC20 (USDC)
+              const mockErc20Deployed = await hre.ignition.deploy(
+                  MockErc20Module,
+                  {
+                      parameters: {
+                          MockErc20Module: {
+                              name: "USD Coin",
+                              symbol: "USDC",
+                              decimals: 6,
+                          },
+                      },
+                  },
+              );
+
+              const mockERC20 = mockErc20Deployed.mockErc20;
+
+              const mockErc20Address = await mockERC20.getAddress();
+
+              mockUsdc = (await ethers.getContractAt(
+                  "MockERC20",
+                  mockErc20Address,
+              )) as MockERC20;
+
+              // Set USDC address for use in tests
+              USDC = mockErc20Address;
+
+              // Deploy NFT Marketplace
               const nftMarketplaceDeployed = await hre.ignition.deploy(
                   NftMarketPlaceModule,
                   {
@@ -67,14 +114,20 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                   "NftMarketplace",
                   nftMarketPlaceAddress,
               )) as NftMarketplace;
-
               nftMarketplace = nftMarketplaceContract.connect(deployer);
 
+              // Setup: Mint NFT and approve marketplace
               await basicNft.connect(deployer).mintNft();
 
               await basicNft
                   .connect(deployer)
                   .approve(nftMarketPlaceAddress, TOKEN_ID);
+
+              // Add USDC support to marketplace
+              await nftMarketplace.addSupportedToken(USDC, usdcPriceFeed, 6);
+
+              // Mint USDC to buyer
+              await mockUsdc.mint(user1.address, ethers.parseUnits("10000", 6));
           });
 
           // ============================================================================
@@ -89,7 +142,6 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
               });
 
               it("sets up native ETH token support by default", async function () {
-                  const NATIVE_TOKEN = ethers.ZeroAddress;
                   const isSupported =
                       await nftMarketplace.isTokenSupportedPublic(NATIVE_TOKEN);
 
@@ -97,8 +149,6 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
               });
 
               it("correctly configures ETH price feed", async function () {
-                  const NATIVE_TOKEN = ethers.ZeroAddress;
-
                   const tokenInfo =
                       await nftMarketplace.getTokenInfo(NATIVE_TOKEN);
 
@@ -113,15 +163,6 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("Token Management", () => {
-              let USDC: string;
-
-              let usdcPriceFeed: string;
-
-              beforeEach(async function () {
-                  USDC = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238";
-                  usdcPriceFeed = "0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E";
-              });
-
               describe("addSupportedToken", () => {
                   it("allows owner to add new supported tokens", async function () {
                       // ACT: owner.addSupportedToken(USDC, usdcPriceFeed, 6)
@@ -146,7 +187,7 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                       // HINT: Use .connect() to switch signer
                       await expect(
                           nftMarketplace
-                              .connect(user)
+                              .connect(user1)
                               .addSupportedToken(USDC, usdcPriceFeed, 6),
                       ).to.be.revertedWith("Not contract owner");
                   });
@@ -162,20 +203,9 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                           .to.emit(nftMarketplace, "TokenAdded")
                           .withArgs(USDC, usdcPriceFeed, 6);
                   });
-                  // ACT: owner.addSupportedToken(USDC, usdcPriceFeed, 6)
-                  // ASSERT: event emitted with (USDC, usdcPriceFeed, 6)
               });
 
               describe("removeSupportedToken", () => {
-                  beforeEach(async function () {
-                      // ARRANGE: Add USDC token first for all these tests
-                      await nftMarketplace.addSupportedToken(
-                          USDC,
-                          usdcPriceFeed,
-                          6,
-                      );
-                  });
-
                   it("allows owner to remove supported tokens", async function () {
                       await nftMarketplace.removeSupportedToken(USDC);
 
@@ -188,7 +218,7 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                   it("reverts when non-owner tries to remove tokens", async function () {
                       await expect(
                           nftMarketplace
-                              .connect(user)
+                              .connect(user1)
                               .removeSupportedToken(USDC),
                       ).to.be.revertedWith("Not contract owner");
                   });
@@ -198,10 +228,10 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                       await nftMarketplace.removeSupportedToken(USDC);
 
                       // ACT: Try to list with removed token
-                      // HINT: You need to import/define the custom error
+
                       await expect(
                           nftMarketplace.listItem(
-                              basicNft.getAddress(),
+                              await basicNft.getAddress(),
                               TOKEN_ID,
                               1000,
                               USDC,
@@ -213,10 +243,8 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                   });
 
                   it("prevents buying with removed token", async function () {
-                      const NATIVE_TOKEN = ethers.ZeroAddress;
-
                       await nftMarketplace.listItem(
-                          basicNft.getAddress(),
+                          await basicNft.getAddress(),
                           TOKEN_ID,
                           PRICE,
                           NATIVE_TOKEN,
@@ -228,7 +256,7 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
                       // ACT: Try to list with removed token
                       await expect(
                           nftMarketplace
-                              .connect(user)
+                              .connect(user1)
                               .buyItem(basicNft.getAddress(), TOKEN_ID, USDC),
                       ).to.be.revertedWithCustomError(
                           nftMarketplace,
@@ -243,39 +271,123 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("listItem", () => {
-              it("lists NFT with correct price and payment token");
-              // ARRANGE: mint NFT, approve marketplace
-              // ACT: listItem(nftAddress, tokenId, 1000e6, USDC)
-              // ASSERT: listing.price == 1000e6
-              // ASSERT: listing.seller == owner
-              // ASSERT: listing.paymentToken == USDC
+              let nftAddress: string;
 
-              it("reverts if price is zero");
-              // ACT: listItem(nftAddress, tokenId, 0, ETH)
-              // ASSERT: reverts with PriceMustBeAboveZero
+              beforeEach(async function () {
+                  // Store it once
+                  nftAddress = await basicNft.getAddress();
 
-              it("reverts if not approved");
-              // ARRANGE: mint NFT, DO NOT approve
-              // ACT: listItem(nftAddress, tokenId, 1 ether, ETH)
-              // ASSERT: reverts with NotApprovedForMarketplace
+                  // Mint and approve
+                  await basicNft.mintNft();
+              });
 
-              it("reverts if not owner");
-              // ARRANGE: mint NFT to user1
-              // ACT: user2.listItem(nftAddress, tokenId, 1 ether, ETH)
-              // ASSERT: reverts with NotOwner
+              it("lists NFT with correct price and payment token", async function () {
+                  await basicNft.approve(
+                      await nftMarketplace.getAddress(),
+                      TOKEN_ID,
+                  );
 
-              it("reverts if already listed");
-              // ARRANGE: list NFT once
-              // ACT: list same NFT again
-              // ASSERT: reverts with AlreadyListed
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
 
-              it("reverts when trying to list with unsupported token");
-              // ACT: listItem(nftAddress, tokenId, 1000, RANDOM_TOKEN)
-              // ASSERT: reverts with TokenNotSupported
+                  const listingInfo = await nftMarketplace.getListing(
+                      nftAddress,
+                      TOKEN_ID,
+                  );
 
-              it("emits ItemListed event");
-              // ACT: listItem(nftAddress, tokenId, 1 ether, ETH)
-              // ASSERT: event emitted with (seller, nftAddress, tokenId, 1 ether, ETH)
+                  assert.equal(listingInfo.price, PRICE);
+                  assert.equal(listingInfo.seller, deployer.address);
+                  assert.equal(listingInfo.paymentToken, NATIVE_TOKEN);
+              });
+
+              it("reverts if price is zero", async function () {
+                  let price = 0n;
+
+                  await expect(
+                      nftMarketplace.listItem(
+                          await basicNft.getAddress(),
+                          TOKEN_ID,
+                          price,
+                          NATIVE_TOKEN,
+                      ),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__PriceMustBeAboveZero",
+                  );
+              });
+
+              it("reverts if not approved", async function () {
+                  const UNAPPROVED_TOKEN_ID = 1;
+
+                  await expect(
+                      nftMarketplace.listItem(
+                          nftAddress,
+                          UNAPPROVED_TOKEN_ID,
+                          PRICE,
+                          NATIVE_TOKEN,
+                      ),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__NotApprovedForMarketplace",
+                  );
+              });
+
+              it("reverts if not owner", async function () {
+                  await basicNft.connect(user1).mintNft();
+
+                  await expect(
+                      nftMarketplace
+                          .connect(user2)
+                          .listItem(nftAddress, TOKEN_ID, PRICE, NATIVE_TOKEN),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__NotOwner",
+                  );
+              });
+
+              it("reverts if already listed", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  await expect(
+                      nftMarketplace.listItem(
+                          nftAddress,
+                          TOKEN_ID,
+                          PRICE,
+                          NATIVE_TOKEN,
+                      ),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__AlreadyListed",
+                  );
+              });
+
+              it("emits ItemListed event", async function () {
+                  await expect(
+                      nftMarketplace.listItem(
+                          nftAddress,
+                          TOKEN_ID,
+                          PRICE,
+                          NATIVE_TOKEN,
+                      ),
+                  )
+                      .to.emit(nftMarketplace, "ItemListed")
+                      .withArgs(
+                          deployer.address,
+                          nftAddress,
+                          TOKEN_ID,
+                          PRICE,
+                          NATIVE_TOKEN,
+                      );
+              });
           });
 
           // ============================================================================
@@ -283,40 +395,133 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("buyItem - Same Token Payment", () => {
-              it("allows buying with ETH when listed in ETH");
-              // ARRANGE: list NFT for 1 ETH
-              // ACT: buyer.buyItem{value: 1 ether}(nftAddress, tokenId, ETH)
-              // ASSERT: NFT owner == buyer
-              // ASSERT: seller proceeds[ETH] == 1 ether
-              // ASSERT: listing deleted
+              let nftAddress: string;
 
-              it("allows buying with ERC20 when listed in same ERC20");
-              // ARRANGE: list NFT for 1000 USDC, buyer has USDC, buyer approves marketplace
-              // ACT: buyer.buyItem(nftAddress, tokenId, USDC)
-              // ASSERT: NFT owner == buyer
-              // ASSERT: seller proceeds[USDC] == 1000e6
-              // ASSERT: buyer USDC balance decreased by 1000e6
+              let nftMarketPlaceAddress: string;
 
-              it("reverts if ETH amount sent is insufficient");
-              // ARRANGE: list NFT for 1 ETH
-              // ACT: buyer.buyItem{value: 0.5 ether}(nftAddress, tokenId, ETH)
-              // ASSERT: reverts with PriceNotMet
+              beforeEach(async function () {
+                  // Store it once
+                  nftAddress = await basicNft.getAddress();
 
-              it("refunds excess ETH to buyer");
-              // ARRANGE: list NFT for 0.3 ETH
-              // ACT: buyer.buyItem{value: 1 ether}(nftAddress, tokenId, ETH)
-              // ASSERT: seller proceeds[ETH] == 0.3 ether
-              // ASSERT: buyer received refund of 0.7 ether
+                  nftMarketPlaceAddress = await nftMarketplace.getAddress();
+              });
 
-              it("reverts if ERC20 allowance is insufficient");
-              // ARRANGE: list for 1000 USDC, buyer has USDC, buyer approves only 500 USDC
-              // ACT: buyer.buyItem(nftAddress, tokenId, USDC)
-              // ASSERT: reverts (transfer fails)
+              it("allows buying with ETH when listed in ETH", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
 
-              it("reverts if ERC20 balance is insufficient");
-              // ARRANGE: list for 1000 USDC, buyer has only 500 USDC
-              // ACT: buyer.buyItem(nftAddress, tokenId, USDC)
-              // ASSERT: reverts (transfer fails)
+                  await nftMarketplace
+                      .connect(user2)
+                      .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                          value: PRICE,
+                      });
+
+                  // ASSERT: NFT owner is now the buyer
+                  const newOwner = await basicNft.ownerOf(TOKEN_ID);
+                  assert.equal(newOwner, user2.address);
+
+                  // ASSERT: Seller has proceeds in ETH
+                  const sellerProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      NATIVE_TOKEN,
+                  );
+                  assert.equal(sellerProceeds, PRICE);
+
+                  // ASSERT: Listing is deleted
+                  const listing = await nftMarketplace.getListing(
+                      nftAddress,
+                      TOKEN_ID,
+                  );
+                  assert.equal(listing.price, 0n);
+              });
+
+              it("allows buying with ERC20 when listed in same ERC20", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  await mockUsdc
+                      .connect(user1)
+                      .approve(nftMarketPlaceAddress, USDC_PRICE);
+
+                  await nftMarketplace
+                      .connect(user1)
+                      .buyItem(nftAddress, TOKEN_ID, USDC);
+
+                  expect(await basicNft.ownerOf(TOKEN_ID)).to.equal(
+                      user1.address,
+                  );
+                  expect(
+                      await nftMarketplace.getProceeds(deployer.address, USDC),
+                  ).to.equal(USDC_PRICE);
+              });
+
+              it("reverts if ETH amount sent is insufficient", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  await expect(
+                      nftMarketplace
+                          .connect(user2)
+                          .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                              value: PRICE / 2n,
+                          }),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__PriceNotMet",
+                  );
+              });
+
+              it("reverts if ERC20 allowance is insufficient", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  // Approve only half the needed amount
+                  await mockUsdc
+                      .connect(user1)
+                      .approve(nftMarketPlaceAddress, USDC_PRICE / 2n);
+
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(nftAddress, TOKEN_ID, USDC),
+                  ).to.be.reverted;
+              });
+
+              it("reverts if ERC20 balance is insufficient", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  // user2 has no USDC, but approve anyway
+                  await mockUsdc
+                      .connect(user2)
+                      .approve(nftMarketPlaceAddress, USDC_PRICE);
+
+                  await expect(
+                      nftMarketplace
+                          .connect(user2)
+                          .buyItem(nftAddress, TOKEN_ID, USDC),
+                  ).to.be.reverted;
+              });
           });
 
           // ============================================================================
@@ -324,56 +529,221 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("buyItem - Cross Token Payment", () => {
-              it("allows buying with ETH when listed in USDC");
-              // ARRANGE:
-              //   - list NFT for 1000 USDC
-              //   - mock price feeds: ETH/USD = $2800, USDC/USD = $1
-              //   - expected ETH needed = 1000 / 2800 = ~0.357 ETH
-              // ACT: buyer.buyItem{value: 0.357 ether}(nftAddress, tokenId, ETH)
-              // ASSERT: NFT owner == buyer
-              // ASSERT: seller proceeds[ETH] == 0.357 ether (NOT USDC!)
-              // ASSERT: listing deleted
+              let nftAddress: string;
 
-              it("allows buying with USDC when listed in ETH");
-              // ARRANGE:
-              //   - list NFT for 1 ETH
-              //   - mock price feeds: ETH/USD = $2800, USDC/USD = $1
-              //   - expected USDC needed = 1 * 2800 = 2800 USDC
-              // ACT: buyer.buyItem(nftAddress, tokenId, USDC)
-              // ASSERT: NFT owner == buyer
-              // ASSERT: seller proceeds[USDC] == 2800e6 (NOT ETH!)
-              // ASSERT: buyer USDC decreased by 2800e6
+              beforeEach(async function () {
+                  nftAddress = await basicNft.getAddress();
+              });
 
-              it("converts between different ERC20 tokens (USDC to DAI)");
-              // ARRANGE:
-              //   - list NFT for 1000 USDC
-              //   - mock price feeds: USDC/USD = $1, DAI/USD = $1
-              //   - expected DAI needed = 1000 DAI
-              // ACT: buyer.buyItem(nftAddress, tokenId, DAI)
-              // ASSERT: NFT owner == buyer
-              // ASSERT: seller proceeds[DAI] == 1000e18
+              it("allows buying with ETH when listed in USDC", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
 
-              it("handles different decimal tokens correctly (6 vs 18)");
-              // ARRANGE:
-              //   - list NFT for 1000 USDC (6 decimals)
-              //   - mock price feeds: USDC/USD = $1, WETH/USD = $2800
-              //   - expected WETH = 1000/2800 = 0.357142857142857142 WETH (18 decimals)
-              // ACT: buyer.buyItem(nftAddress, tokenId, WETH)
-              // ASSERT: conversion maintains precision
-              // ASSERT: seller proceeds[WETH] == 357142857142857142 (wei units)
+                  const expectedEthAmount =
+                      (USDC_PRICE * 10n ** 18n * USDC_USD_PRICE) /
+                      (ETH_USD_PRICE * 10n ** 6n);
 
-              it("reverts if converted amount is insufficient");
-              // ARRANGE:
-              //   - list NFT for 1000 USDC
-              //   - ETH/USD = $2800, need 0.357 ETH
-              // ACT: buyer.buyItem{value: 0.3 ether}(nftAddress, tokenId, ETH)
-              // ASSERT: reverts with PriceNotMet
+                  await nftMarketplace
+                      .connect(user1)
+                      .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                          value: expectedEthAmount,
+                      });
 
-              it("stores proceeds in buyer's payment token, not listing token");
-              // ARRANGE: list for USDC
-              // ACT: buy with ETH
-              // ASSERT: seller proceeds[ETH] > 0
-              // ASSERT: seller proceeds[USDC] == 0
+                  expect(await basicNft.ownerOf(TOKEN_ID)).to.equal(
+                      user1.address,
+                  );
+
+                  // Seller receives ETH, not USDC
+                  const proceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      NATIVE_TOKEN,
+                  );
+                  expect(proceeds).to.equal(expectedEthAmount);
+              });
+
+              it("allows buying with USDC when listed in ETH", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  const expectedUsdcAmount =
+                      (PRICE * ETH_USD_PRICE) / (USDC_USD_PRICE * 10n ** 12n);
+
+                  await mockUsdc
+                      .connect(user1)
+                      .approve(
+                          await nftMarketplace.getAddress(),
+                          expectedUsdcAmount,
+                      );
+
+                  const user1UsdcBefore = await mockUsdc.balanceOf(
+                      user1.address,
+                  );
+
+                  // ACT: Buy with USDC
+                  await nftMarketplace
+                      .connect(user1)
+                      .buyItem(nftAddress, TOKEN_ID, USDC);
+
+                  // ASSERT: NFT owner is buyer
+                  expect(await basicNft.ownerOf(TOKEN_ID)).to.equal(
+                      user1.address,
+                  );
+
+                  // ASSERT: Seller proceeds in USDC, NOT ETH
+                  const sellerUsdcProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      USDC,
+                  );
+                  expect(sellerUsdcProceeds).to.equal(expectedUsdcAmount);
+
+                  const sellerEthProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      NATIVE_TOKEN,
+                  );
+                  expect(sellerEthProceeds).to.equal(0n);
+
+                  // ASSERT: Buyer USDC decreased
+                  const user1UsdcAfter = await mockUsdc.balanceOf(
+                      user1.address,
+                  );
+                  expect(user1UsdcBefore - user1UsdcAfter).to.equal(
+                      expectedUsdcAmount,
+                  );
+              });
+
+              it("handles different decimal tokens correctly (6 vs 18)", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  const expectedUsdcAmount =
+                      (PRICE * ETH_USD_PRICE) / (USDC_USD_PRICE * 10n ** 12n);
+
+                  // Approve marketplace to spend USDC
+                  await mockUsdc
+                      .connect(user1)
+                      .approve(
+                          await nftMarketplace.getAddress(),
+                          expectedUsdcAmount,
+                      );
+
+                  const user1UsdcBefore = await mockUsdc.balanceOf(
+                      user1.address,
+                  );
+
+                  // ACT: Buy with USDC
+                  await nftMarketplace
+                      .connect(user1)
+                      .buyItem(nftAddress, TOKEN_ID, USDC);
+
+                  // ASSERT: NFT owner is buyer
+                  expect(await basicNft.ownerOf(TOKEN_ID)).to.equal(
+                      user1.address,
+                  );
+
+                  // ASSERT: Seller proceeds in USDC, NOT ETH
+                  const sellerUsdcProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      USDC,
+                  );
+                  expect(sellerUsdcProceeds).to.equal(expectedUsdcAmount);
+
+                  const sellerEthProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      NATIVE_TOKEN,
+                  );
+                  expect(sellerEthProceeds).to.equal(0n);
+
+                  // ASSERT: Buyer USDC decreased
+                  const user1UsdcAfter = await mockUsdc.balanceOf(
+                      user1.address,
+                  );
+                  expect(user1UsdcBefore - user1UsdcAfter).to.equal(
+                      expectedUsdcAmount,
+                  );
+              });
+
+              it("reverts if converted amount is insufficient", async function () {
+                  // ARRANGE: List for 1000 USDC
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  // Get required ETH amount
+                  const requiredEth =
+                      await nftMarketplace.getListingPriceInToken(
+                          nftAddress,
+                          TOKEN_ID,
+                          NATIVE_TOKEN,
+                      );
+
+                  // ACT & ASSERT: Send insufficient ETH
+                  const insufficientAmount =
+                      requiredEth - ethers.parseEther("0.1");
+
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                              value: insufficientAmount,
+                          }),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__PriceNotMet",
+                  );
+              });
+
+              it("stores proceeds in buyer's payment token, not listing token", async function () {
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  // Get required ETH
+                  const requiredEth =
+                      await nftMarketplace.getListingPriceInToken(
+                          nftAddress,
+                          TOKEN_ID,
+                          NATIVE_TOKEN,
+                      );
+
+                  // ACT: Buy with ETH (cross-token payment)
+                  await nftMarketplace
+                      .connect(user1)
+                      .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                          value: requiredEth,
+                      });
+
+                  // ASSERT: Seller has ETH proceeds, NOT USDC
+                  const sellerEthProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      NATIVE_TOKEN,
+                  );
+                  expect(sellerEthProceeds).to.be.gt(0n);
+                  expect(sellerEthProceeds).to.equal(requiredEth);
+
+                  const sellerUsdcProceeds = await nftMarketplace.getProceeds(
+                      deployer.address,
+                      USDC,
+                  );
+                  expect(sellerUsdcProceeds).to.equal(0n);
+              });
           });
 
           // ============================================================================
@@ -381,38 +751,142 @@ import BasicNftModule from "../../ignition/modules/basic-nft";
           // ============================================================================
 
           describe("buyItem - Edge Cases", () => {
-              it("reverts if NFT not listed");
-              // ACT: buyItem(nftAddress, unlisted_tokenId, ETH)
-              // ASSERT: reverts with NotListed
+              let nftAddress: string;
 
-              it("reverts when trying to buy with unsupported token");
-              // ARRANGE: list NFT in ETH
-              // ACT: buyItem(nftAddress, tokenId, RANDOM_UNSUPPORTED_TOKEN)
-              // ASSERT: reverts with TokenNotSupported
+              beforeEach(async function () {
+                  nftAddress = await basicNft.getAddress();
+              });
 
-              it("reverts if price feed returns 0 or negative");
-              // ARRANGE: mock price feed to return 0
-              // ACT: buyItem with cross-token conversion
-              // ASSERT: reverts with "Invalid price from feed"
+              it("reverts if NFT not listed", async function () {
+                  const UNLISTED_TOKEN_ID = 999;
 
-              it("handles NFT transfer after listing (seller no longer owns)");
-              // ARRANGE: seller lists NFT, then transfers it away
-              // ACT: buyer tries to buy
-              // ASSERT: reverts (safeTransferFrom fails)
+                  // ACT & ASSERT: Try to buy unlisted NFT
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(
+                              nftAddress,
+                              UNLISTED_TOKEN_ID,
+                              NATIVE_TOKEN,
+                              {
+                                  value: PRICE,
+                              },
+                          ),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__NotListed",
+                  );
+              });
 
-              it("handles approval removal after listing");
-              // ARRANGE: seller lists NFT, then removes marketplace approval
-              // ACT: buyer tries to buy
-              // ASSERT: reverts (safeTransferFrom fails)
+              it("reverts when trying to buy with unsupported token", async function () {
+                  // ARRANGE: List NFT in ETH
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
 
-              it("protects against reentrancy");
-              // ARRANGE: create malicious NFT that tries to reenter on safeTransferFrom
-              // ACT: buy the malicious NFT
-              // ASSERT: reentrancy blocked by nonReentrant modifier
+                  const RANDOM_UNSUPPORTED_TOKEN =
+                      "0x1234567890123456789012345678901234567890";
 
-              it("emits ItemBought event with correct payment token");
-              // ACT: buy with ETH when listed in USDC
-              // ASSERT: event emitted with paymentToken == ETH (buyer's token)
+                  // ACT & ASSERT: Try to buy with unsupported token
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(
+                              nftAddress,
+                              TOKEN_ID,
+                              RANDOM_UNSUPPORTED_TOKEN,
+                          ),
+                  ).to.be.revertedWithCustomError(
+                      nftMarketplace,
+                      "NftMarketplace__TokenNotSupported",
+                  );
+              });
+
+              it("handles NFT transfer after listing (seller no longer owns)", async function () {
+                  // ARRANGE: List NFT
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  // Transfer NFT away from seller
+                  await basicNft
+                      .connect(deployer)
+                      .transferFrom(deployer.address, user2.address, TOKEN_ID);
+
+                  // ACT & ASSERT: Buyer tries to buy (should fail because seller no longer owns it)
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                              value: PRICE,
+                          }),
+                  ).to.be.reverted; // safeTransferFrom will fail
+              });
+
+              it("handles approval removal after listing", async function () {
+                  // ARRANGE: List NFT
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      PRICE,
+                      NATIVE_TOKEN,
+                  );
+
+                  // Remove marketplace approval
+                  await basicNft
+                      .connect(deployer)
+                      .approve(ethers.ZeroAddress, TOKEN_ID);
+
+                  // ACT & ASSERT: Buyer tries to buy (should fail due to no approval)
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                              value: PRICE,
+                          }),
+                  ).to.be.reverted; // safeTransferFrom will fail due to no approval
+              });
+
+              it("emits ItemBought event with correct payment token", async function () {
+                  // ARRANGE: List NFT in USDC
+                  await nftMarketplace.listItem(
+                      nftAddress,
+                      TOKEN_ID,
+                      USDC_PRICE,
+                      USDC,
+                  );
+
+                  // Get required ETH amount
+                  const requiredEth =
+                      await nftMarketplace.getListingPriceInToken(
+                          nftAddress,
+                          TOKEN_ID,
+                          NATIVE_TOKEN,
+                      );
+
+                  // ACT & ASSERT: Buy with ETH and check event
+                  await expect(
+                      nftMarketplace
+                          .connect(user1)
+                          .buyItem(nftAddress, TOKEN_ID, NATIVE_TOKEN, {
+                              value: requiredEth,
+                          }),
+                  )
+                      .to.emit(nftMarketplace, "ItemBought")
+                      .withArgs(
+                          user1.address, // buyer
+                          nftAddress, // nftAddress
+                          TOKEN_ID, // tokenId
+                          requiredEth, // price (in buyer's token)
+                          NATIVE_TOKEN, // paymentToken (buyer's token, not listing token!)
+                      );
+              });
           });
 
           // ============================================================================
