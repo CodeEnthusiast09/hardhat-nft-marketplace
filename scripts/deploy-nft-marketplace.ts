@@ -17,9 +17,10 @@ async function main() {
 
     if (developmentChains.includes(hre.network.name)) {
         console.log("* Local network detected, deploying mocks...");
+
         const mockResult = await hre.ignition.deploy(MockModule);
-        const mock = mockResult.mockV3Aggregator;
-        priceFeedAddress = await mock.getAddress();
+
+        priceFeedAddress = await mockResult.ethPriceFeed.getAddress();
     } else {
         const chainId = hre.network.config.chainId!;
 
