@@ -6,7 +6,7 @@ import {
 import fs from "fs";
 import { network, ethers } from "hardhat";
 import path from "path";
-import { NftMarketplace } from "../typechain-types";
+import { BasicNft, NftMarketplace } from "../typechain-types";
 
 async function updateFrontend() {
     if (process.env.UPDATE_FRONT_END) {
@@ -24,16 +24,27 @@ async function updateFrontend() {
         );
 
         const nftMarketPlaceAddress =
-            deploymentJson["NFTMarketPlaceModule#NFTMarketplace"];
+            deploymentJson["NFTMarketPlaceModule#NftMarketplace"];
 
         if (!nftMarketPlaceAddress) {
-            throw new Error("Address not found");
+            throw new Error("Marketplace address not found");
         }
 
         const nftMarketPlace = (await ethers.getContractAt(
             "NftMarketplace", // Changed from "Raffle"
             nftMarketPlaceAddress,
         )) as unknown as NftMarketplace;
+
+        const basicNftAddress = deploymentJson["BasicNftModule#BasicNft"];
+
+        if (!basicNftAddress) {
+            throw new Error("Nft address not found");
+        }
+
+        const basicNft = (await ethers.getContractAt(
+            "BasicNft",
+            basicNftAddress,
+        )) as unknown as BasicNft;
 
         // Read existing frontend file to preserve addresses for other chains
         let existingAddresses: Record<string, string> = {
@@ -59,23 +70,29 @@ async function updateFrontend() {
         // Update the address for current chain
         existingAddresses[chainId] = nftMarketPlace.target as string;
 
-        const abi = nftMarketPlace.interface.formatJson();
+        existingAddresses[chainId] = basicNft.target as string;
+
+        const nftMarketPlaceAbi = nftMarketPlace.interface.formatJson();
+
+        const basicNftAbi = basicNft.interface.formatJson();
 
         const fileContent = `const CONTRACT_ADDRESSES = {
-  11155111: "${existingAddresses["11155111"]}", // Sepolia
-  31337: "${existingAddresses["31337"]}", // Hardhat
-} as const;
+          11155111: "${existingAddresses["11155111"]}", // Sepolia
+          31337: "${existingAddresses["31337"]}", // Hardhat
+          } as const;
 
-export const getContractAddress = (
-  chainId: number | undefined,
-): \`0x\${string}\` => {
-  if (!chainId) return CONTRACT_ADDRESSES[11155111] as \`0x\${string}\`;
-  return (CONTRACT_ADDRESSES[chainId as keyof typeof CONTRACT_ADDRESSES] ||
-    CONTRACT_ADDRESSES[11155111]) as \`0x\${string}\`;
-};
+          export const getContractAddress = (
+              chainId: number | undefined,
+          ): \`0x\${string}\` => {
+          if (!chainId) return CONTRACT_ADDRESSES[11155111] as \`0x\${string}\`;
+            return (CONTRACT_ADDRESSES[chainId as keyof typeof CONTRACT_ADDRESSES] ||
+            CONTRACT_ADDRESSES[11155111]) as \`0x\${string}\`;
+          };
 
-export const ABI = ${abi} as const;
-`;
+          export const NFT_MARKETPLACE_ABI = ${nftMarketPlaceAbi} as const;
+
+          export const BASIC_NFT_ABI = ${basicNftAbi} as const
+        `;
 
         fs.writeFileSync(frontEndUtils, fileContent);
 

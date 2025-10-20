@@ -67,10 +67,10 @@ const config: HardhatUserConfig = {
     },
     etherscan: {
         // npx hardhat verify --network <NETWORK> <CONTRACT_ADDRESS> <CONSTRUCTOR_PARAMETERS>
-        apiKey: {
-            sepolia: ETHERSCAN_API_KEY,
-            polygon: POLYGONSCAN_API_KEY,
-        },
+        apiKey: ETHERSCAN_API_KEY,
+    },
+    sourcify: {
+        enabled: false, // Optional: to suppress the Sourcify warning
     },
     gasReporter: {
         enabled: false,
