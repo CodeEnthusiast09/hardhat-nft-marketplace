@@ -70,8 +70,6 @@ async function updateFrontend() {
         // Update the address for current chain
         existingAddresses[chainId] = nftMarketPlace.target as string;
 
-        existingAddresses[chainId] = basicNft.target as string;
-
         const nftMarketPlaceAbi = nftMarketPlace.interface.formatJson();
 
         const basicNftAbi = basicNft.interface.formatJson();

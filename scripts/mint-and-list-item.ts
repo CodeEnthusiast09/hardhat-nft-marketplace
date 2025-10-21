@@ -3,7 +3,7 @@ import { moveBlocks } from "../utils/move-blocks";
 import path from "path";
 import fs from "fs";
 
-const PRICE = ethers.parseEther("0.1");
+const PRICE = ethers.parseEther("0.005");
 
 async function mintAndList() {
     const chainId = network.config.chainId ?? 31337;
