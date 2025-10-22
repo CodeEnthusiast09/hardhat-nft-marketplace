@@ -34,7 +34,7 @@ A decentralized NFT marketplace built with Next.js, Solidity, The Graph, and Web
 
 ```bash
 git clone https://github.com/CodeEnthusiast09/hardhat-nft-marketplace.git
-cd harhat-nft-marketplace
+cd hardhat-nft-marketplace
 ```
 
 ### 2. Install Dependencies
