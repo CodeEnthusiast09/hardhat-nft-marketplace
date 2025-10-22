@@ -30,14 +30,14 @@ async function mintAndList() {
 
     if (randomNumber == 1) {
         const basicNftTwoAddress =
-            deploymentJson["BasicNftTwoModule#BasicNftTwo"];
+            deploymentJson["BasicNftTwoV2Module#BasicNftTwo"];
 
         basicNft = await ethers.getContractAt(
             "BasicNftTwo",
             basicNftTwoAddress,
         );
     } else {
-        const basicNftAddress = deploymentJson["BasicNftModule#BasicNft"];
+        const basicNftAddress = deploymentJson["BasicNftV2Module#BasicNft"];
 
         basicNft = await ethers.getContractAt("BasicNft", basicNftAddress);
     }

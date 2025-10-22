@@ -1,5 +1,7 @@
 {
   "NFTMarketPlaceModule#NftMarketplace": "0x52B1f728c5772eA9CF17b2662fD0c90852C51a23",
   "BasicNftModule#BasicNft": "0xf6cFb1E109Cbd2563738858e45AE2381A8757571",
-  "BasicNftTwoModule#BasicNftTwo": "0x91456C5dDc7d3E71612A2020A0075CbC2a66AA59"
+  "BasicNftTwoModule#BasicNftTwo": "0x91456C5dDc7d3E71612A2020A0075CbC2a66AA59",
+  "BasicNftV2Module#BasicNft": "0xFc4935847Cd8c44BbA0a03f8BbF47e68F1d48119",
+  "BasicNftTwoV2Module#BasicNftTwo": "0xdc6713577bd9688627Dbcf06C2310bB905CDEACD"
 }
